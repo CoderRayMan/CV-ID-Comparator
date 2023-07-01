@@ -8,6 +8,8 @@ from id_validator import process_document
 from google.api_core.exceptions import InvalidArgument
 from pdf2image import convert_from_path
 import logging as log
+import concurrent.futures as threadpools
+
 log.basicConfig(level=log.INFO)
 def extract_images_docx(cv_doc):
     log.info("extracting images from document - docx")
@@ -49,7 +51,7 @@ def rotate_image(image, angle):
 
 angles = [30, 60, 90, -30, -60, -90]
 
-def get_faces(image,rotating=False):
+def rotate_and_getfaces(image,rotating=False):
     log.info("getting faces")
     faces = []
     # rgb_image = enhanceImage(image)
@@ -57,19 +59,31 @@ def get_faces(image,rotating=False):
     rotates=[rgb_image]
     if rotating:
         rotates+=[rotate_image(rgb_image, angle) for angle in angles]
-    for rt_img in rotates:
-        log.info("extracting a face...")
-        # Detect faces in the image
-        face_locations = face_recognition.face_locations(rt_img, model='cnn',number_of_times_to_upsample=2)
-        # Extract the face region
-        for face_location in face_locations:
-            # top, right, bottom, left = face_location
-            # face_image = rt_img[top:bottom, left:right]
-            face_encoding = face_recognition.face_encodings(
-                rt_img, known_face_locations=[face_location],num_jitters=100, model='large')[0]
-            faces.append(face_encoding)
+    with threadpools.ThreadPoolExecutor(max_workers=8,thread_name_prefix="worker_") as masterpool:
+        futures=masterpool.map(get_face,rotates)
+        raw_faces=[future for future in futures]
+        faces = [item for sublist in raw_faces for item in sublist]
+        # masterpool.shutdown(wait=True)
+
     log.info("found %d faces for the document",len(faces))    
     return faces
+def get_face(rt_img):
+    l_faces=[]
+    log.info("extracting a face...")
+        # Detect faces in the image
+    face_locations = face_recognition.face_locations(rt_img, model='cnn',number_of_times_to_upsample=2)
+    log.info(" %d locations fetched" , len(face_locations))
+    # Extract the face region
+    for face_location in face_locations:
+        # top, right, bottom, left = face_location
+        # face_image = rt_img[top:bottom, left:right]
+        face_encoding = face_recognition.face_encodings(
+            rt_img, known_face_locations=[face_location],num_jitters=100, model='large')[0]
+        log.info("encodings fetched ... ")
+        l_faces.append(face_encoding)
+    log.info("faces extracted... ...")
+    return l_faces
+    
 # Function to extract human face Images from PDF or word document
 
 
@@ -92,7 +106,7 @@ def extract_human_faces(inp_doc, rotating=False):
             return []
     humanImages = []
     for image in image_list:
-        humanImages += get_faces(image,rotating)
+        humanImages += rotate_and_getfaces(image,rotating)
     log.info("extracting human faces complete with %d faces",len(humanImages))
     return humanImages
 
